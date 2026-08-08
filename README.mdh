@@ -1,0 +1,81 @@
+# vector-search-api
+
+Tiny semantic search service: embeddings stored as a memory-mapped numpy
+array (no vector DB), cosine similarity via a single BLAS call, exposed
+over a raw ASGI endpoint (Starlette, no pydantic overhead).
+
+## Why memory-mapped?
+
+`np.load(path, mmap_mode='r')` opens the array backed by the OS page
+cache instead of the process heap. Process RSS stays small regardless of
+corpus size, and pages fault in lazily as the matmul actually touches
+them. The tradeoff: first-touch latency is a bit higher than a fully
+in-RAM array, and it only pays off once the index is large relative to
+available RAM — see `benchmarks/benchmark_latency.py` for a direct
+comparison.
+
+## Setup (uv)
+
+```bash
+uv sync --extra dev
+```
+
+## Build the index
+
+```bash
+uv run python scripts/build_index.py
+```
+
+Writes `index/vectors.npy` and `index/documents.json`. Swap in your own
+corpus by editing `DOCUMENTS` in that script.
+
+## Run the server
+
+```bash
+uv run uvicorn vector_search.app:app --loop uvloop --http httptools --reload
+```
+
+```bash
+curl -X POST localhost:8000/search -H 'content-type: application/json' \
+    -d '{"query": "in-memory data store", "top_k": 3}'
+```
+
+## Tests
+
+```bash
+uv run pytest
+```
+
+Unit tests use a small synthetic index (no model download required).
+
+## Benchmarks
+
+```bash
+# mmap vs fully-in-RAM latency + memory footprint
+uv run python benchmarks/benchmark_latency.py
+
+# HTTP-level load test (start the server first)
+uv run locust -f benchmarks/locustfile.py --host http://localhost:8000 \
+    --headless -u 50 -r 10 -t 30s
+
+# quick single-request latency check
+hyperfine --warmup 3 \
+    'curl -s -X POST localhost:8000/search -H "content-type: application/json" -d "{\"query\": \"test\"}"'
+```
+
+## Layout
+
+```
+src/vector_search/
+  config.py      # env-driven settings
+  index.py        # VectorIndex — mmap load + BLAS search, no ASGI/model deps
+  embedding.py    # lazy-loaded embedding model wrapper
+  app.py          # Starlette routes
+scripts/
+  build_index.py  # embeds a corpus, writes vectors.npy + documents.json
+tests/
+  test_search.py  # unit tests against a synthetic index
+benchmarks/
+  benchmark_latency.py  # mmap vs in-RAM comparison
+  locustfile.py          # HTTP load test
+```
