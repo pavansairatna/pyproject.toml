@@ -1,0 +1,1 @@
+That's the full repo — pyproject.toml for uv sync, core logic split from the ASGI layer (index.py has no Starlette/model dependency, so it's independently unit-testable)
